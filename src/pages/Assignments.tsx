@@ -159,8 +159,10 @@ export default function Bids() {
   }, [filterTerm]);
 
   useEffect(() => {
-    getMembers({ limit: 500 }).then(setMembers).catch(() => {});
-  }, []);
+    if (createOpen) {
+      getMembers().then(setMembers).catch(() => {});
+    }
+  }, [createOpen]);
 
   const filtered = useMemo(() => {
     let list = [...bids];
@@ -348,23 +350,6 @@ export default function Bids() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Select value={filterTerm} onValueChange={setFilterTerm}>
-            <SelectTrigger className="w-36">
-              <SelectValue placeholder="All terms" />
-            </SelectTrigger>
-            <SelectContent>
-              {terms.map(t => (
-                <SelectItem key={t.id} value={t.name}>
-                  <span className="flex items-center gap-1.5">
-                    {t.name === currentTerm && (
-                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#00C795] shrink-0" />
-                    )}
-                    {t.name}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
           <Button size="sm" onClick={() => { setCreateOpen(true); setCreateError(null); }}>
             + New Bid
           </Button>
@@ -468,11 +453,20 @@ export default function Bids() {
             </div>
             <div className="space-y-1">
               <Label>Role Preference</Label>
-              <Input
-                placeholder="e.g. FULLSTACK"
-                value={createState.rolePref1}
-                onChange={e => setCreateState(s => ({ ...s, rolePref1: e.target.value }))}
-              />
+              <Select
+                value={createState.rolePref1 || "__none__"}
+                onValueChange={v => setCreateState(s => ({ ...s, rolePref1: v === "__none__" ? "" : v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select role…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {["FULLSTACK", "DATA", "ENGINES", "AR_VR", "UI_UX", "VIDEO", "INSTRUCTOR", "PM"].map(r => (
+                    <SelectItem key={r} value={r}>{r}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label>Hours / Week</Label>
@@ -504,6 +498,9 @@ export default function Bids() {
             bids={bids}
             projects={projects}
             term={filterTerm}
+            terms={terms}
+            currentTerm={currentTerm}
+            onTermChange={setFilterTerm}
             onBidsChange={setBids}
             onRefresh={fetchBids}
             loading={loading}
@@ -700,6 +697,24 @@ export default function Bids() {
       {/* Table view (table only) */}
       {activeTab === "table" && <>
       <div className="flex items-center gap-3 px-6 py-3 bg-white border-b border-gray-200 flex-wrap">
+        {/* Term selector */}
+        <Select value={filterTerm} onValueChange={setFilterTerm}>
+          <SelectTrigger className="w-32 h-8 text-sm">
+            <SelectValue placeholder="All terms" />
+          </SelectTrigger>
+          <SelectContent>
+            {terms.map(t => (
+              <SelectItem key={t.id} value={t.name}>
+                <span className="flex items-center gap-1.5">
+                  {t.name === currentTerm && (
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#00C795] shrink-0" />
+                  )}
+                  {t.name}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {/* Member / project search */}
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none" />

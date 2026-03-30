@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useMatch } from "react-router-dom";
-import { Users, FolderOpen, Inbox, ChevronDown, Plus, X, Check, Loader2, ShieldCheck } from "lucide-react";
+import { Users, FolderOpen, Inbox, ChevronDown, Plus, X, Check, Loader2, ShieldCheck, FileText, Calendar } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTermContext } from "@/context/TermContext";
 
@@ -25,6 +25,10 @@ const navItems = [
     to: "/hiring",
     label: "Hiring",
     icon: Users,
+    subtabs: [
+      { to: "/hiring/application-form", label: "Application Form", icon: FileText },
+      { to: "/hiring/schedule", label: "Schedule", icon: Calendar },
+    ],
   }
 ];
 

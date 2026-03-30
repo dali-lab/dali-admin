@@ -109,8 +109,8 @@ function MenteeChip({
         <p className="text-sm font-medium text-gray-900 truncate leading-tight">
           {member.fullName ?? member.daliEmail ?? "—"}
         </p>
-        {member.assignedProject && (
-          <p className="text-xs text-gray-400 truncate">{member.assignedProject.name}</p>
+        {(member.currentTermProject ?? member.assignedProject) && (
+          <p className="text-xs text-gray-400 truncate">{(member.currentTermProject ?? member.assignedProject)!.name}</p>
         )}
       </div>
       {onRemove && (
@@ -172,8 +172,8 @@ function MentorRow({
           <p className="text-sm font-semibold text-gray-900 truncate leading-tight">
             {mentor.fullName ?? mentor.daliEmail ?? "—"}
           </p>
-          {mentor.assignedProject && (
-            <p className="text-xs text-gray-400 truncate">{mentor.assignedProject.name}</p>
+          {(mentor.currentTermProject ?? mentor.assignedProject) && (
+            <p className="text-xs text-gray-400 truncate">{(mentor.currentTermProject ?? mentor.assignedProject)!.name}</p>
           )}
         </div>
         {optedOut ? (

@@ -101,12 +101,15 @@ function SkeletonRows({ count = 8 }: { count?: number }) {
 }
 
 interface EditState {
+  fullName: string;
+  daliEmail: string;
   isActive: boolean;
   isAlum: boolean;
   classYear: string;
   major: string;
   minor: string;
   linkedinUrl: string;
+  githubId: string;
 }
 
 export default function Members() {
@@ -148,7 +151,7 @@ export default function Members() {
     setLoading(true);
     setError(null);
     try {
-      const params: Parameters<typeof getMembers>[0] = { limit: 200 };
+      const params: Parameters<typeof getMembers>[0] = { limit: 1000 };
       if (filterRole !== "all") params.role = filterRole;
       if (filterActive === "active" || filterActive === "this-term") params.active = true;
       const data = await getMembers(params);
@@ -253,12 +256,15 @@ export default function Members() {
       const m = await getMember(id);
       setDetail(m);
       setEditState({
+        fullName: m.fullName ?? "",
+        daliEmail: m.daliEmail ?? "",
         isActive: m.isActive,
         isAlum: m.isAlum,
         classYear: m.classYear ?? "",
         major: m.major ?? "",
         minor: m.minor ?? "",
         linkedinUrl: m.linkedinUrl ?? "",
+        githubId: (m as any).githubId ?? "",
       });
     } catch {
       // Fall back to list data
@@ -266,12 +272,15 @@ export default function Members() {
       setDetail(found);
       if (found) {
         setEditState({
+          fullName: found.fullName ?? "",
+          daliEmail: found.daliEmail ?? "",
           isActive: found.isActive,
           isAlum: found.isAlum,
           classYear: found.classYear ?? "",
           major: found.major ?? "",
           minor: found.minor ?? "",
           linkedinUrl: found.linkedinUrl ?? "",
+          githubId: (found as any).githubId ?? "",
         });
       }
     } finally {
@@ -293,13 +302,16 @@ export default function Members() {
     setSaveError(null);
     try {
       const updated = await patchMember(selectedId, {
+        fullName: editState.fullName || undefined,
+        daliEmail: editState.daliEmail || undefined,
         isActive: editState.isActive,
         isAlum: editState.isAlum,
         classYear: editState.classYear || undefined,
         major: editState.major || undefined,
         minor: editState.minor || undefined,
         linkedinUrl: editState.linkedinUrl || undefined,
-      });
+        githubId: editState.githubId || undefined,
+      } as any);
       setDetail(updated);
       setMembers(prev =>
         prev.map(m => (m.id === selectedId ? { ...m, ...updated } : m))
@@ -559,18 +571,25 @@ export default function Members() {
                   >
                     <span className="flex items-center">Joined <SortIcon col="joinedTerm" /></span>
                   </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => handleSort("isActive")}
-                  >
-                    <span className="flex items-center">Active <SortIcon col="isActive" /></span>
-                  </TableHead>
-                  <TableHead
-                    className="cursor-pointer select-none"
-                    onClick={() => handleSort("isAlum")}
-                  >
-                    <span className="flex items-center">Alum <SortIcon col="isAlum" /></span>
-                  </TableHead>
+                  {filterActive === "this-term" && (
+                    <TableHead>Project</TableHead>
+                  )}
+                  {filterActive !== "this-term" && (
+                    <TableHead
+                      className="cursor-pointer select-none"
+                      onClick={() => handleSort("isActive")}
+                    >
+                      <span className="flex items-center">Active <SortIcon col="isActive" /></span>
+                    </TableHead>
+                  )}
+                  {filterActive === "all" && (
+                    <TableHead
+                      className="cursor-pointer select-none"
+                      onClick={() => handleSort("isAlum")}
+                    >
+                      <span className="flex items-center">Alum <SortIcon col="isAlum" /></span>
+                    </TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -578,7 +597,7 @@ export default function Members() {
                   <SkeletonRows count={10} />
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-32 text-center text-gray-400">
+                    <TableCell colSpan={filterActive === "all" ? 6 : 5} className="h-32 text-center text-gray-400">
                       No members found. Try adjusting filters.
                     </TableCell>
                   </TableRow>
@@ -619,30 +638,45 @@ export default function Members() {
                       </TableCell>
                       <TableCell className="text-sm text-gray-700">{m.classYear ?? "—"}</TableCell>
                       <TableCell className="text-sm text-gray-700">{m.joinedTerm?.name ?? "—"}</TableCell>
-                      <TableCell>
-                        <span
-                          className={cn(
+                      {filterActive === "this-term" && (
+                        <TableCell className="text-sm text-gray-700">
+                          {(() => {
+                            const fromRoles = (m.memberTermRoles ?? [])
+                              .filter(r => r.term.name === currentTerm)
+                              .map(r => r.project.name);
+                            const fromTeam = m.team?.term?.name === currentTerm ? [m.team.project?.name].filter(Boolean) as string[] : [];
+                            const projects = [...new Set([...fromRoles, ...fromTeam])];
+                            if (projects.length === 0) return "—";
+                            return (
+                              <div className="flex flex-wrap gap-1">
+                                {projects.map((name, i) => (
+                                  <span key={i} className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700">{name}</span>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </TableCell>
+                      )}
+                      {filterActive !== "this-term" && (
+                        <TableCell>
+                          <span className={cn(
                             "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                            m.isActive
-                              ? "bg-green-100 text-green-700"
-                              : "bg-gray-100 text-gray-500"
-                          )}
-                        >
-                          {m.isActive ? "Active" : "Inactive"}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <span
-                          className={cn(
+                            m.isActive ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                          )}>
+                            {m.isActive ? "Active" : "Inactive"}
+                          </span>
+                        </TableCell>
+                      )}
+                      {filterActive === "all" && (
+                        <TableCell>
+                          <span className={cn(
                             "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                            m.isAlum
-                              ? "bg-blue-100 text-blue-700"
-                              : "bg-gray-100 text-gray-400"
-                          )}
-                        >
-                          {m.isAlum ? "Alum" : "Current"}
-                        </span>
-                      </TableCell>
+                            m.isAlum ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-400"
+                          )}>
+                            {m.isAlum ? "Alum" : "Current"}
+                          </span>
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))
                 )}
@@ -684,7 +718,10 @@ export default function Members() {
                 <RolesEditor
                   memberId={detail.id}
                   hiredRoles={detail.hiredRoles ?? []}
-                  onRolesChange={(roles: HiredRole[]) => setDetail(d => d ? { ...d, hiredRoles: roles } : d)}
+                  onRolesChange={(roles: HiredRole[]) => {
+                    setDetail(d => d ? { ...d, hiredRoles: roles } : d);
+                    setMembers(prev => prev.map(m => m.id === detail.id ? { ...m, hiredRoles: roles } : m));
+                  }}
                 />
 
                 {/* Terms */}
@@ -722,11 +759,14 @@ export default function Members() {
                             if (detail) {
                               setEditState({
                                 isActive: detail.isActive,
+                                fullName: detail.fullName ?? "",
+                                daliEmail: detail.daliEmail ?? "",
                                 isAlum: detail.isAlum,
                                 classYear: detail.classYear ?? "",
                                 major: detail.major ?? "",
                                 minor: detail.minor ?? "",
                                 linkedinUrl: detail.linkedinUrl ?? "",
+                                githubId: (detail as any).githubId ?? "",
                               });
                             }
                           }}
@@ -747,6 +787,25 @@ export default function Members() {
 
                   {editState && (
                     <div className="space-y-3">
+                      <div className="space-y-1">
+                        <Label>Full Name</Label>
+                        <Input
+                          value={editState.fullName}
+                          onChange={e => setEditState(s => s ? { ...s, fullName: e.target.value } : s)}
+                          disabled={!editing}
+                          placeholder="Jane Smith"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>DALI Email</Label>
+                        <Input
+                          value={editState.daliEmail}
+                          onChange={e => setEditState(s => s ? { ...s, daliEmail: e.target.value } : s)}
+                          disabled={!editing}
+                          placeholder="jane.smith@dali.dartmouth.edu"
+                          className="font-mono text-xs"
+                        />
+                      </div>
                       <div className="flex items-center justify-between">
                         <Label>Active</Label>
                         <Switch
@@ -779,6 +838,17 @@ export default function Members() {
                         />
                       </div>
                       <div className="space-y-1">
+                        <Label>GitHub Username</Label>
+                        <Input
+                          value={editState.githubId}
+                          onChange={e =>
+                            setEditState(s => s ? { ...s, githubId: e.target.value } : s)
+                          }
+                          disabled={!editing}
+                          className="font-mono text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1">
                         <Label>Major</Label>
                         <Input
                           value={editState.major}
@@ -786,7 +856,6 @@ export default function Members() {
                             setEditState(s => s ? { ...s, major: e.target.value } : s)
                           }
                           disabled={!editing}
-                          placeholder="Major"
                         />
                       </div>
                       <div className="space-y-1">
@@ -797,7 +866,6 @@ export default function Members() {
                             setEditState(s => s ? { ...s, minor: e.target.value } : s)
                           }
                           disabled={!editing}
-                          placeholder="Minor"
                         />
                       </div>
                       <div className="space-y-1">
@@ -842,8 +910,15 @@ export default function Members() {
   );
 }
 
-const ALL_ROLES = ["FULLSTACK", "DATA", "ENGINES", "AR_VR", "UI_UX", "VIDEO", "INSTRUCTOR", "PM"] as const;
+const ALL_ROLES = ["FULLSTACK", "DATA", "ENGINES", "AR_VR", "UI_UX", "VIDEO", "THREE_D_MODELING", "ANIMATION", "INSTRUCTOR", "PM", "CORE"] as const;
 const ALL_LEVELS = ["P1", "P2", "P3", "C", "L"] as const;
+
+function levelsForRole(role: string): string[] {
+  if (role === "INSTRUCTOR") return ["L"];
+  if (role === "CORE") return ["C"];
+  return ["P1", "P2", "P3"];
+}
+
 
 function RolesEditor({
   memberId,
@@ -858,7 +933,7 @@ function RolesEditor({
   const [error, setSaveError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [newRole, setNewRole] = useState<string>(ALL_ROLES[0]);
-  const [newLevel, setNewLevel] = useState<string>(ALL_LEVELS[0]);
+  const [newLevel, setNewLevel] = useState<string>(levelsForRole(ALL_ROLES[0])[0]);
 
   const existingRoles = new Set(hiredRoles.map(r => r.role));
 

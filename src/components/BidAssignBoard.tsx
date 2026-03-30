@@ -7,11 +7,279 @@
  * Uses native HTML5 DnD — no external library.
  */
 
-import { useState, useRef, useCallback } from "react";
-import { RefreshCw, X, Send, Loader2, CheckCircle2 } from "lucide-react";
-import { patchBid, publishBids } from "@/lib/api";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { RefreshCw, X, Send, Loader2, CheckCircle2, AlertCircle, Zap, Database, MessageSquare, GitBranch } from "lucide-react";
+import { patchBid, publishBids, notifySlack, checkTeam, updateGithub } from "@/lib/api";
 import type { Bid, Project } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+// ─── Ship modal ───────────────────────────────────────────────────────────────
+
+type AutomationStatus = "idle" | "loading" | "done" | "error";
+
+interface Automation {
+  id: string;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  run: () => Promise<string>; // returns a result summary string
+}
+
+function ShipModal({
+  projectId,
+  projectName,
+  term,
+  bidCount,
+  slackChannelId,
+  githubTeamSlug,
+  onClose,
+}: {
+  projectId: string;
+  projectName: string;
+  term: string;
+  bidCount: number;
+  slackChannelId: string | null | undefined;
+  githubTeamSlug: string | null | undefined;
+  onClose: () => void;
+}) {
+  const [statuses, setStatuses] = useState<Record<string, AutomationStatus>>({});
+  const [results, setResults] = useState<Record<string, string>>({});
+  const [runningAll, setRunningAll] = useState(false);
+
+  // Editable channel/team name inputs
+  const [slackInput, setSlackInput] = useState(slackChannelId ?? "");
+  const [githubInput, setGithubInput] = useState(githubTeamSlug ?? "");
+
+  // Team existence check for "Publish to DB"
+  const [teamCheck, setTeamCheck] = useState<{ exists: boolean; members: string[] } | null>(null);
+  const [teamChecking, setTeamChecking] = useState(true);
+  const [publishConfirmed, setPublishConfirmed] = useState(false);
+
+  useEffect(() => {
+    checkTeam(projectId, term)
+      .then(r => setTeamCheck(r))
+      .catch(() => setTeamCheck(null))
+      .finally(() => setTeamChecking(false));
+  }, [projectId, term]);
+
+  const publishBlocked = teamCheck?.exists && !publishConfirmed;
+
+  const automations: Automation[] = [
+    {
+      id: "publish",
+      label: "Publish to DB",
+      description: "Create team, set member roles, mark project active",
+      icon: <Database className="h-4 w-4" />,
+      run: async () => {
+        const r = await publishBids(projectId, term);
+        return `${r.memberCount} member${r.memberCount !== 1 ? "s" : ""} added to team`;
+      },
+    },
+    {
+      id: "slack",
+      label: "Notify via Slack",
+      description: "Create channel & notify team",
+      icon: <MessageSquare className="h-4 w-4" />,
+      run: async () => {
+        const r = await notifySlack(projectId, term, slackInput || undefined);
+        if (r.channelName) setSlackInput(r.channelName);
+        if (r.sent === r.total) return `${r.sent}/${r.total} members notified`;
+        const reason = r.firstFailure?.error ?? "some members not found in Slack";
+        return `${r.sent}/${r.total} sent — ${reason}`;
+      },
+    },
+    {
+      id: "github",
+      label: "Update GitHub",
+      description: "Create team & add members",
+      icon: <GitBranch className="h-4 w-4" />,
+      run: async () => {
+        const r = await updateGithub(projectId, term);
+        if (r.teamSlug) setGithubInput(r.teamSlug);
+        return `${r.updated}/${r.total} members added`;
+      },
+    }
+  ];
+
+  async function runOne(automation: Automation) {
+    setStatuses(s => ({ ...s, [automation.id]: "loading" }));
+    setResults(r => ({ ...r, [automation.id]: "" }));
+    try {
+      const summary = await automation.run();
+      setStatuses(s => ({ ...s, [automation.id]: "done" }));
+      setResults(r => ({ ...r, [automation.id]: summary }));
+    } catch (e: any) {
+      setStatuses(s => ({ ...s, [automation.id]: "error" }));
+      setResults(r => ({ ...r, [automation.id]: e.message ?? "Failed" }));
+    }
+  }
+
+  async function runAll() {
+    setRunningAll(true);
+    for (const a of automations) {
+      if (a.id === "publish" && publishBlocked) continue;
+      await runOne(a);
+    }
+    setRunningAll(false);
+  }
+
+  const anyLoading = Object.values(statuses).includes("loading") || runningAll;
+  const allDone = automations.every(a => a.id === "publish" && publishBlocked ? true : statuses[a.id] === "done");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-2xl w-[440px] max-w-[95vw] overflow-hidden">
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-gray-100">
+          <div>
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-[#00C795]" />
+              <p className="font-semibold text-gray-900 text-sm">Finalize Assignment</p>
+            </div>
+            <p className="text-xs text-gray-500 mt-0.5">
+              <span className="font-medium text-gray-700">{projectName}</span>
+              {" · "}{bidCount} member{bidCount !== 1 ? "s" : ""} assigned{" · "}{term}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Automations list */}
+        <div className="px-5 py-3 space-y-2">
+          {automations.map(a => {
+            const status = statuses[a.id] ?? "idle";
+            const result = results[a.id];
+            const isPublish = a.id === "publish";
+            const blocked = isPublish && publishBlocked;
+
+            return (
+              <div key={a.id} className={cn(
+                "flex flex-col gap-2 p-3 rounded-xl border transition-colors",
+                status === "done" ? "border-[#00C795]/40 bg-[#E6FFF9]" :
+                status === "error" ? "border-red-200 bg-red-50" :
+                blocked ? "border-amber-200 bg-amber-50" :
+                "border-gray-200 bg-gray-50"
+              )}>
+                <div className="flex items-center gap-3">
+                  <div className={cn(
+                    "flex items-center justify-center w-8 h-8 rounded-lg shrink-0",
+                    status === "done" ? "bg-[#00C795]/15 text-[#00A87A]" :
+                    status === "error" ? "bg-red-100 text-red-500" :
+                    blocked ? "bg-amber-100 text-amber-600" :
+                    "bg-white text-gray-500 border border-gray-200"
+                  )}>
+                    {status === "loading" ? <Loader2 className="h-4 w-4 animate-spin" /> :
+                     status === "done" ? <CheckCircle2 className="h-4 w-4" /> :
+                     status === "error" ? <AlertCircle className="h-4 w-4" /> :
+                     blocked ? <AlertCircle className="h-4 w-4" /> :
+                     teamChecking && isPublish ? <Loader2 className="h-4 w-4 animate-spin" /> :
+                     a.icon}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-800">{a.label}</p>
+                    {!result && a.id === "slack" && (
+                      <input
+                        value={slackInput}
+                        onChange={e => setSlackInput(e.target.value)}
+                        placeholder="channel-name"
+                        className="mt-0.5 w-full text-xs font-mono bg-transparent border-0 border-b border-gray-200 focus:border-gray-400 outline-none text-gray-600 placeholder:text-gray-300 truncate"
+                      />
+                    )}
+                    {!result && a.id === "github" && (
+                      <input
+                        value={githubInput}
+                        onChange={e => setGithubInput(e.target.value)}
+                        placeholder="team-slug"
+                        className="mt-0.5 w-full text-xs font-mono bg-transparent border-0 border-b border-gray-200 focus:border-gray-400 outline-none text-gray-600 placeholder:text-gray-300 truncate"
+                      />
+                    )}
+                    {(result || (a.id !== "slack" && a.id !== "github")) && (
+                      <p className="text-xs text-gray-500 truncate">
+                        {result || a.description}
+                      </p>
+                    )}
+                  </div>
+                  {!blocked && (
+                    <button
+                      onClick={() => runOne(a)}
+                      disabled={anyLoading || (isPublish && teamChecking)}
+                      className={cn(
+                        "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-40",
+                        status === "done"
+                          ? "bg-[#00C795]/10 text-[#00A87A] hover:bg-[#00C795]/20"
+                          : status === "error"
+                          ? "bg-red-100 text-red-600 hover:bg-red-200"
+                          : "bg-white border border-gray-200 text-gray-700 hover:bg-gray-100"
+                      )}
+                    >
+                      {status === "done" ? "Re-run" : status === "error" ? "Retry" : "Run"}
+                    </button>
+                  )}
+                </div>
+
+                {/* Team already exists warning */}
+                {isPublish && blocked && teamCheck && (
+                  <div className="ml-11 space-y-1.5">
+                    <p className="text-xs text-amber-700 font-medium">
+                      A team for {term} already exists with {teamCheck.members.length} member{teamCheck.members.length !== 1 ? "s" : ""}:
+                    </p>
+                    <p className="text-xs text-amber-600">{teamCheck.members.join(", ")}</p>
+                    <p className="text-xs text-amber-700">Running will overwrite it with the current assignments.</p>
+                    <button
+                      onClick={() => {
+                        setPublishConfirmed(true);
+                        runOne(a);
+                      }}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-amber-600 text-white hover:bg-amber-700 transition-colors font-medium"
+                    >
+                      Overwrite & run anyway
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between px-5 py-4 border-t border-gray-100">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            Close
+          </button>
+          <button
+            onClick={runAll}
+            disabled={anyLoading || teamChecking}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50",
+              allDone
+                ? "bg-[#00C795]/10 text-[#00A87A] hover:bg-[#00C795]/20"
+                : "bg-[#00C795] text-white hover:bg-[#00B382]"
+            )}
+          >
+            {anyLoading
+              ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Running…</>
+              : allDone
+              ? <><CheckCircle2 className="h-3.5 w-3.5" /> All done</>
+              : <><Zap className="h-3.5 w-3.5" /> Run all</>
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Role picker modal ────────────────────────────────────────────────────────
 
@@ -48,6 +316,9 @@ interface Props {
   bids: Bid[];
   projects: Project[];
   term: string;
+  terms: { id: string; name: string }[];
+  currentTerm: string;
+  onTermChange: (term: string) => void;
   onBidsChange: (bids: Bid[]) => void;
   onRefresh: () => void;
   loading: boolean;
@@ -123,6 +394,7 @@ function MemberCard({
   isSelected,
   onSelect,
   onDelete,
+  onUnassign,
 }: {
   bid: Bid;
   projectId: string | null;
@@ -133,6 +405,7 @@ function MemberCard({
   isSelected: boolean;
   onSelect?: (bid: Bid) => void;
   onDelete?: (bidId: string) => void;
+  onUnassign?: (bidId: string) => void;
 }) {
   const pref = projectId ? prefLevel(bid, projectId) : null;
   const hiredRoles = bid.member?.hiredRoles ?? [];
@@ -192,8 +465,18 @@ function MemberCard({
           )}
         </div>
 
-        {/* Delete button */}
-        {onDelete && (
+        {/* Unassign button (only when assigned to a project) */}
+        {onUnassign && projectId && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onUnassign(bid.id); }}
+            title="Unassign"
+            className="shrink-0 p-0.5 rounded text-gray-300 hover:text-orange-400 hover:bg-orange-50 transition-colors"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {/* Delete button (only when unassigned) */}
+        {onDelete && !projectId && (
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(bid.id); }}
             title="Delete bid"
@@ -224,9 +507,9 @@ function ProjectColumn({
   isUnassigned,
   onSelectBid,
   onDeleteBid,
+  onUnassignBid,
   selectedBidId,
-  onPublish,
-  publishState,
+  onShip,
 }: {
   projectId: string | null;
   title: string;
@@ -242,9 +525,9 @@ function ProjectColumn({
   isUnassigned?: boolean;
   onSelectBid?: (bid: Bid) => void;
   onDeleteBid?: (bidId: string) => void;
+  onUnassignBid?: (bidId: string) => void;
   selectedBidId?: string | null;
-  onPublish?: () => void;
-  publishState?: "idle" | "loading" | "done" | "error";
+  onShip?: () => void;
 }) {
   const colId = projectId ?? "__unassigned__";
   const isOver = dragOverId === colId;
@@ -275,25 +558,14 @@ function ProjectColumn({
             <span className="text-xs font-bold text-gray-500 bg-white border border-gray-200 rounded-full px-1.5 py-0.5">
               {bids.length}
             </span>
-            {onPublish && (
+            {onShip && (
               <button
-                onClick={onPublish}
-                disabled={publishState === "loading" || bids.length === 0}
-                title={publishState === "done" ? "Published!" : "Publish team"}
-                className={cn(
-                  "p-1 rounded transition-colors disabled:opacity-40",
-                  publishState === "done"
-                    ? "text-[#00C795]"
-                    : publishState === "error"
-                    ? "text-red-500 hover:bg-red-50"
-                    : "text-gray-400 hover:text-[#00C795] hover:bg-[#E6FFF9]",
-                )}
+                onClick={onShip}
+                disabled={bids.length === 0}
+                title="Finalize assignment"
+                className="p-1 rounded transition-colors disabled:opacity-40 text-gray-400 hover:text-[#00C795] hover:bg-[#E6FFF9]"
               >
-                {publishState === "loading"
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : publishState === "done"
-                  ? <CheckCircle2 className="h-3.5 w-3.5" />
-                  : <Send className="h-3.5 w-3.5" />}
+                <Send className="h-3.5 w-3.5" />
               </button>
             )}
           </div>
@@ -322,6 +594,7 @@ function ProjectColumn({
               isSelected={selectedBidId === bid.id}
               onSelect={onSelectBid}
               onDelete={onDeleteBid}
+              onUnassign={onUnassignBid}
             />
           ))
         )}
@@ -332,18 +605,20 @@ function ProjectColumn({
 
 // ─── Main board ───────────────────────────────────────────────────────────────
 
-export default function BidAssignBoard({ bids, projects, term, onBidsChange, onRefresh, loading, onSelectBid, onDeleteBid, selectedBidId }: Props) {
+export default function BidAssignBoard({ bids, projects, term, terms, currentTerm, onTermChange, onBidsChange, onRefresh, loading, onSelectBid, onDeleteBid, selectedBidId }: Props) {
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [recentlyMovedId, setRecentlyMovedId] = useState<string | null>(null);
   const [saving, setSaving] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [publishStates, setPublishStates] = useState<Record<string, "idle" | "loading" | "done" | "error">>({});
+  const [shipProjectId, setShipProjectId] = useState<string | null>(null);
   const [rolePick, setRolePick] = useState<{ bidId: string; targetProjectId: string | null; roles: string[] } | null>(null);
   const [memberSearch, setMemberSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const dragLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recentlyMovedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const visibleProjects = projects.filter(p =>
     !projectSearch || p.name.toLowerCase().includes(projectSearch.toLowerCase())
@@ -401,6 +676,30 @@ export default function BidAssignBoard({ bids, projects, term, onBidsChange, onR
     }
   }, [bids, projects, onBidsChange]);
 
+  const handleUnassign = useCallback(async (bidId: string) => {
+    await applyAssignment(bidId, null, null);
+  }, [applyAssignment]);
+
+  const handleDragMove = useCallback((e: React.DragEvent) => {
+    const board = boardRef.current;
+    if (!board) return;
+    if (autoScrollRef.current) clearInterval(autoScrollRef.current);
+    const rect = board.getBoundingClientRect();
+    const threshold = 80;
+    const speed = 12;
+    const distLeft = e.clientX - rect.left;
+    const distRight = rect.right - e.clientX;
+    if (distLeft < threshold) {
+      autoScrollRef.current = setInterval(() => { board.scrollLeft -= speed; }, 16);
+    } else if (distRight < threshold) {
+      autoScrollRef.current = setInterval(() => { board.scrollLeft += speed; }, 16);
+    }
+  }, []);
+
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollRef.current) { clearInterval(autoScrollRef.current); autoScrollRef.current = null; }
+  }, []);
+
   const handleDrop = useCallback(async (targetProjectId: string | null) => {
     setDragOverId(null);
     if (!draggingId) return;
@@ -430,15 +729,6 @@ export default function BidAssignBoard({ bids, projects, term, onBidsChange, onR
     }
   }, [draggingId, bids, applyAssignment]);
 
-  const handlePublish = useCallback(async (projectId: string) => {
-    setPublishStates(prev => ({ ...prev, [projectId]: "loading" }));
-    try {
-      await publishBids(projectId, term);
-      setPublishStates(prev => ({ ...prev, [projectId]: "done" }));
-    } catch {
-      setPublishStates(prev => ({ ...prev, [projectId]: "error" }));
-    }
-  }, [term]);
 
   const pendingSaves = saving.size;
 
@@ -455,8 +745,40 @@ export default function BidAssignBoard({ bids, projects, term, onBidsChange, onR
           onCancel={() => setRolePick(null)}
         />
       )}
+      {shipProjectId && (() => {
+        const proj = projects.find(p => p.id === shipProjectId);
+        const assignedBids = bids.filter(b => b.assignedProjectId === shipProjectId);
+        return (
+          <ShipModal
+            projectId={shipProjectId}
+            projectName={proj?.name ?? "Project"}
+            term={term}
+            bidCount={assignedBids.length}
+            slackChannelId={proj?.slackChannelId}
+            githubTeamSlug={proj?.githubTeamSlug}
+            onClose={() => setShipProjectId(null)}
+          />
+        );
+      })()}
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-6 py-3 border-b border-gray-200 bg-white shrink-0 flex-wrap">
+        <Select value={term} onValueChange={onTermChange}>
+          <SelectTrigger className="w-32 h-8 text-sm">
+            <SelectValue placeholder="All terms" />
+          </SelectTrigger>
+          <SelectContent>
+            {terms.map(t => (
+              <SelectItem key={t.id} value={t.name}>
+                <span className="flex items-center gap-1.5">
+                  {t.name === currentTerm && (
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#00C795] shrink-0" />
+                  )}
+                  {t.name}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <input
           type="text"
           placeholder="Search members…"
@@ -485,10 +807,9 @@ export default function BidAssignBoard({ bids, projects, term, onBidsChange, onR
           <button
             onClick={onRefresh}
             disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            className="text-gray-400 hover:text-gray-600 disabled:opacity-40 transition-colors"
           >
-            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-            Refresh
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </button>
         </div>
       </div>
@@ -503,7 +824,13 @@ export default function BidAssignBoard({ bids, projects, term, onBidsChange, onR
       </div>
 
       {/* Board */}
-      <div className="flex-1 overflow-x-auto overflow-y-hidden">
+      <div
+        ref={boardRef}
+        className="flex-1 overflow-x-auto overflow-y-hidden"
+        onDragOver={handleDragMove}
+        onDragEnd={stopAutoScroll}
+        onDrop={stopAutoScroll}
+      >
         <div className="flex gap-4 p-5 h-full items-start">
           {/* Unassigned column */}
           <ProjectColumn
@@ -548,10 +875,9 @@ export default function BidAssignBoard({ bids, projects, term, onBidsChange, onR
                 onDragStart={setDraggingId}
                 onDragEnd={() => setDraggingId(null)}
                 onSelectBid={onSelectBid}
-                onDeleteBid={onDeleteBid}
+                onUnassignBid={handleUnassign}
                 selectedBidId={selectedBidId}
-                onPublish={() => handlePublish(project.id)}
-                publishState={publishStates[project.id] ?? "idle"}
+                onShip={() => setShipProjectId(project.id)}
               />
             ))
           )}

@@ -28,6 +28,7 @@ export interface Member {
   termsInDali: TermRef[];
   joinedTerm: TermRef | null;
   memberTermRoles?: Array<{ term: { name: string }; project: { id?: string; name: string } }>;
+  team?: { project: { name: string }; term: { name: string } } | null;
   roles?: string[];
   currentRole?: string | null;
   notionPageId?: string | null;
@@ -63,6 +64,12 @@ export interface MemberPatch {
   daliEmail: string;
 }
 
+export interface ProjectRepo {
+  id: string;
+  type: string;
+  url: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -79,13 +86,27 @@ export interface Project {
   projectUrls: Array<{ label: string; url: string }>;
   isPublic: boolean;
   notionPageId: string | null;
+  publicNotionPageId: string | null;
+  slackChannelId: string | null;
+  githubTeamSlug: string | null;
   partnerNames?: string[];
+  repos?: ProjectRepo[];
 }
 
 export interface ProjectPatch {
+  name?: string;
   isPublic: boolean;
   status: string;
   description: string;
+  coverImage?: string | null;
+  publicNotionPageId?: string | null;
+  slackChannelId?: string | null;
+  githubTeamSlug?: string | null;
+  projectUrls?: Array<{ label: string; url: string }>;
+  sectors?: string[];
+  product?: string[];
+  techStack?: string[];
+  partnerNames?: string[];
 }
 
 export interface Bid {
@@ -183,6 +204,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({}));
     throw new Error(body?.error ?? `HTTP ${res.status}`);
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -200,7 +222,7 @@ export async function getMembers(params?: {
     role: params?.role,
     active: params?.active,
     page: params?.page,
-    limit: params?.limit ?? 200,
+    limit: params?.limit ?? 1000,
   });
   const data = await apiFetch<Member[] | { members: Member[] }>(`/members${query}`);
   // Raw endpoint returns array directly
@@ -245,6 +267,10 @@ export async function deleteHiredRole(memberId: string, roleId: string): Promise
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
 
+export async function createProject(data: { name: string; status?: string; term?: string }): Promise<Project> {
+  return apiFetch<Project>("/projects", { method: "POST", body: JSON.stringify(data) });
+}
+
 export async function getProjects(params?: {
   term?: string;
   status?: string;
@@ -254,11 +280,30 @@ export async function getProjects(params?: {
   return data.projects;
 }
 
+export async function getProject(id: string): Promise<Project> {
+  return apiFetch<Project>(`/projects/${id}`);
+}
+
 export async function patchProject(id: string, data: Partial<ProjectPatch>): Promise<Project> {
   return apiFetch<Project>(`/projects/${id}`, {
     method: "PATCH",
     body: JSON.stringify(data),
   });
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  await apiFetch<void>(`/projects/${id}`, { method: "DELETE" });
+}
+
+export async function createRepo(projectId: string, data: { type: string; url: string }): Promise<ProjectRepo> {
+  return apiFetch<ProjectRepo>(`/projects/${projectId}/repos`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteRepo(projectId: string, repoId: string): Promise<void> {
+  await apiFetch<void>(`/projects/${projectId}/repos/${repoId}`, { method: "DELETE" });
 }
 
 // ─── Bids ─────────────────────────────────────────────────────────────────────
@@ -290,8 +335,26 @@ export async function deleteBid(id: string): Promise<void> {
   await apiFetch<void>(`/bids/${id}`, { method: "DELETE" });
 }
 
+export async function checkTeam(projectId: string, term: string): Promise<{ exists: boolean; memberCount: number; members: string[] }> {
+  return apiFetch(`/bids/check-team?projectId=${encodeURIComponent(projectId)}&term=${encodeURIComponent(term)}`);
+}
+
 export async function publishBids(projectId: string, term: string): Promise<{ teamId: string; memberCount: number }> {
   return apiFetch("/bids/publish", {
+    method: "POST",
+    body: JSON.stringify({ projectId, term }),
+  });
+}
+
+export async function notifySlack(projectId: string, term: string, channelName?: string): Promise<{ sent: number; total: number; channelId?: string; channelName?: string; results: { member: string; status: string; error?: string }[]; firstFailure?: { member: string; status: string; error?: string } }> {
+  return apiFetch("/bids/notify-slack", {
+    method: "POST",
+    body: JSON.stringify({ projectId, term, channelName }),
+  });
+}
+
+export async function updateGithub(projectId: string, term: string): Promise<{ updated: number; total: number; teamSlug?: string; results?: { member: string; status: string; error?: string }[] }> {
+  return apiFetch("/bids/update-github", {
     method: "POST",
     body: JSON.stringify({ projectId, term }),
   });
@@ -314,6 +377,49 @@ export async function getCurrentTerm(): Promise<Term | null> {
 export async function createTerm(data: { name: string; startDate: string; endDate: string }): Promise<Term> {
   return apiFetch<Term>("/terms", {
     method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+// ─── Applications ─────────────────────────────────────────────────────────────
+
+export interface ApplicationUser {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  dartmouthEmail: string;
+}
+
+export interface Application {
+  id: string;
+  userId: string;
+  user: ApplicationUser;
+  termId: string;
+  term: { id: string; name: string };
+  status: "PENDING" | "UNDER_REVIEW" | "ACCEPTED" | "REJECTED";
+  rolesApplied: string[];
+  portfolioUrl: string | null;
+  resumeUrl: string | null;
+  statement: string | null;
+  reviewerNotes: string | null;
+  submittedAt: string;
+  updatedAt: string;
+}
+
+export async function getApplications(params?: {
+  term?: string;
+  status?: string;
+}): Promise<Application[]> {
+  const query = buildQuery({ term: params?.term, status: params?.status });
+  return apiFetch<Application[]>(`/applications${query}`);
+}
+
+export async function patchApplicationStatus(
+  id: string,
+  data: { status: string; reviewerNotes?: string }
+): Promise<Application> {
+  return apiFetch<Application>(`/applications/${id}/status`, {
+    method: "PATCH",
     body: JSON.stringify(data),
   });
 }

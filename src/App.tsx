@@ -5,6 +5,8 @@ import Projects from "./pages/Projects";
 import Bids from "./pages/Assignments";
 import AccessControl from "./pages/AccessControl";
 import Hiring from "./pages/Hiring";
+import ApplicationForm from "./pages/ApplicationForm";
+import Schedule from "./pages/Schedule";
 import Mentorship from "./pages/Mentorship";
 
 export default function App() {
@@ -18,6 +20,8 @@ export default function App() {
         <Route path="projects" element={<Projects />} />
         <Route path="projects/assignments" element={<Bids />} />
         <Route path="hiring" element={<Hiring />} />
+        <Route path="hiring/application-form" element={<ApplicationForm />} />
+        <Route path="hiring/schedule" element={<Schedule />} />
       </Route>
     </Routes>
   );
